@@ -190,49 +190,62 @@ if seed and pts_file:
                                     st.error("❌ No Document element found in the KML structure")
                                     raise ValueError("Invalid KML structure: missing Document element")
                         
-                        # Clear all existing placemarks and create new ones from scratch
-                        st.info("📍 Clearing existing placemarks and creating new ones")
+                        # Adjust placemarks to match the number of points
+                        st.info("📍 Adjusting placemarks to match GeoJSON points")
                         
-                        # Store template before removing
+                        # Store a template for cloning
                         template_placemark = placemarks[0] if placemarks else None
                         
-                        # Remove all existing placemarks - find their actual parents
-                        for pm in placemarks:
-                            # Search through all elements to find the parent
+                        # If we need more placemarks, clone the first one with ALL its structure
+                        while len(placemarks) < len(points):
+                            # Deep copy the entire placemark with all WPML metadata
+                            clone_str = ET.tostring(template_placemark, encoding="unicode")
+                            clone = ET.fromstring(clone_str)
+                            
+                            # Find where to insert (after the last placemark)
+                            parent = None
+                            for elem in root.iter():
+                                if placemarks[-1] in elem:
+                                    parent = elem
+                                    # Find index and insert after
+                                    idx = list(elem).index(placemarks[-1])
+                                    elem.insert(idx + 1, clone)
+                                    break
+                            
+                            if parent is None:
+                                # Fallback: append to document
+                                document.append(clone)
+                            
+                            placemarks.append(clone)
+                            st.info(f"📍 Added placemark {len(placemarks)}")
+                        
+                        # If we have too many placemarks, remove extras
+                        while len(placemarks) > len(points):
+                            pm_to_remove = placemarks.pop()
                             for elem in root.iter():
                                 try:
-                                    if pm in elem:
-                                        elem.remove(pm)
+                                    if pm_to_remove in elem:
+                                        elem.remove(pm_to_remove)
                                         break
                                 except (ValueError, TypeError):
-                                    # Element not in this parent, continue searching
                                     continue
+                            st.info(f"📍 Removed excess placemark")
                         
-                        # Create new placemarks for each point
-                        new_placemarks = []
+                        # Now update ONLY the coordinates, preserving everything else
+                        st.info("📍 Updating coordinates while preserving WPML metadata")
+                        updated_count = 0
+                        for pm, (lon, lat, alt) in zip(placemarks, points):
+                            # Find the Point/coordinates element
+                            point_elem = pm.find(".//kml:Point", KML_NS)
+                            if point_elem is not None:
+                                coords_elem = point_elem.find("kml:coordinates", KML_NS)
+                                if coords_elem is not None:
+                                    old_coords = coords_elem.text
+                                    coords_elem.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+                                    updated_count += 1
+                                    st.info(f"📍 Updated waypoint {updated_count}: {coords_elem.text}")
                         
-                        for i, (lon, lat, alt) in enumerate(points):
-                            # Create new placemark element
-                            placemark = ET.SubElement(document, "{" + KML_NS["kml"] + "}Placemark")
-                            
-                            # Add Point element
-                            point = ET.SubElement(placemark, "{" + KML_NS["kml"] + "}Point")
-                            
-                            # Add coordinates
-                            coords = ET.SubElement(point, "{" + KML_NS["kml"] + "}coordinates")
-                            coords.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
-                            
-                            # If we have a template, copy other elements (like name, style, etc.)
-                            if template_placemark is not None:
-                                for child in template_placemark:
-                                    if not child.tag.endswith("Point"):
-                                        placemark.append(copy.deepcopy(child))
-                            
-                            new_placemarks.append(placemark)
-                        
-                        placemarks = new_placemarks
-                        
-                        st.success(f"✅ Created {len(placemarks)} new placemarks with GeoJSON coordinates")
+                        st.success(f"✅ Updated {updated_count} waypoint coordinates while preserving WPML structure")
                         
                         # Show the new coordinates
                         with st.expander("View new waypoint coordinates", expanded=False):
@@ -270,16 +283,6 @@ if seed and pts_file:
                             template_placemarks = template_root.findall(".//kml:Placemark[kml:Point]", KML_NS)
                             st.info(f"📍 Found {len(template_placemarks)} placemarks in template.kml")
                             
-                            # Clear existing placemarks in template
-                            for pm in template_placemarks:
-                                for elem in template_root.iter():
-                                    try:
-                                        if pm in elem:
-                                            elem.remove(pm)
-                                            break
-                                    except (ValueError, TypeError):
-                                        continue
-                            
                             # Find Document element in template
                             template_doc = template_root.find(".//kml:Document", KML_NS)
                             if template_doc is None:
@@ -288,29 +291,54 @@ if seed and pts_file:
                                 else:
                                     template_doc = template_root.find(".//Document", None)
                             
-                            # Add new placemarks to template
-                            if template_doc is not None:
-                                for i, (lon, lat, alt) in enumerate(points):
-                                    placemark = ET.SubElement(template_doc, "{" + KML_NS["kml"] + "}Placemark")
-                                    
-                                    # Add name
-                                    name_elem = ET.SubElement(placemark, "{" + KML_NS["kml"] + "}name")
-                                    name_elem.text = f"Waypoint {i+1}"
-                                    
-                                    # Add Point element
-                                    point = ET.SubElement(placemark, "{" + KML_NS["kml"] + "}Point")
-                                    
-                                    # Add coordinates
-                                    coords = ET.SubElement(point, "{" + KML_NS["kml"] + "}coordinates")
-                                    coords.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
-                                    
-                                    # Copy style from template if available
-                                    if template_placemarks and len(template_placemarks) > 0:
-                                        for child in template_placemarks[0]:
-                                            if child.tag.endswith("Style") or child.tag.endswith("styleUrl"):
-                                                placemark.append(copy.deepcopy(child))
+                            # Store template for cloning
+                            template_pm = template_placemarks[0] if template_placemarks else None
+                            
+                            # Re-fetch to get updated list
+                            template_placemarks = list(template_placemarks)  # Convert to list for mutation
+                            
+                            # Adjust number of placemarks
+                            while len(template_placemarks) < len(points):
+                                # Clone with all metadata
+                                clone_str = ET.tostring(template_pm, encoding="unicode")
+                                clone = ET.fromstring(clone_str)
                                 
-                                st.success(f"✅ Updated template.kml with {len(points)} waypoints")
+                                # Find insertion point
+                                parent = None
+                                for elem in template_root.iter():
+                                    if template_placemarks[-1] in elem:
+                                        parent = elem
+                                        idx = list(elem).index(template_placemarks[-1])
+                                        elem.insert(idx + 1, clone)
+                                        break
+                                
+                                if parent is None and template_doc is not None:
+                                    template_doc.append(clone)
+                                
+                                template_placemarks.append(clone)
+                            
+                            # Remove excess placemarks
+                            while len(template_placemarks) > len(points):
+                                pm_to_remove = template_placemarks.pop()
+                                for elem in template_root.iter():
+                                    try:
+                                        if pm_to_remove in elem:
+                                            elem.remove(pm_to_remove)
+                                            break
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            # Update coordinates only
+                            updated = 0
+                            for pm, (lon, lat, alt) in zip(template_placemarks, points):
+                                point_elem = pm.find(".//kml:Point", KML_NS)
+                                if point_elem is not None:
+                                    coords_elem = point_elem.find("kml:coordinates", KML_NS)
+                                    if coords_elem is not None:
+                                        coords_elem.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+                                        updated += 1
+                            
+                            st.success(f"✅ Updated template.kml with {updated} waypoints preserving metadata")
                         
                         # Create output KMZ file
                         buf = io.BytesIO()
