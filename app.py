@@ -3,410 +3,136 @@ import zipfile
 import io
 import json
 import xml.etree.ElementTree as ET
-import copy
 
-# KML namespace for XML parsing
+# KML namespace
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
-# WPML may also use the wpml namespace
-WPML_NS = {"wpml": "http://www.dji.com/wpml/1.0.2"}
 ET.register_namespace("", KML_NS["kml"])
-ET.register_namespace("wpml", WPML_NS["wpml"])
 
-def points_from_geojson(file, altitude_override=None):
-    """
-    Extract point coordinates from a GeoJSON file.
-    
-    Args:
-        file: Uploaded GeoJSON file object
-        altitude_override: Optional altitude to use for all points (meters)
-        
-    Returns:
-        list: List of tuples containing (longitude, latitude, altitude)
-    """
+def points_from_geojson(file):
+    """Extract points from GeoJSON file."""
     gj = json.load(file)
     pts = []
-    
     for f in gj["features"]:
         if f["geometry"]["type"].lower() == "point":
             lon, lat = f["geometry"]["coordinates"][:2]
-            
-            if altitude_override is not None:
-                alt = float(altitude_override)
-            else:
-                # Get altitude from properties, default to 30m if not specified
-                alt = float(f.get("properties", {}).get("alt_m", 30))
-            
+            # Get altitude from properties or use default
+            alt = float(f.get("properties", {}).get("alt_m", 30))
             pts.append((lon, lat, alt))
-    
     return pts
 
 def set_coords(pm, lon, lat, alt):
-    """
-    Update the coordinates of a KML placemark.
-    
-    Args:
-        pm: KML placemark element
-        lon: Longitude coordinate
-        lat: Latitude coordinate
-        alt: Altitude in meters
-    """
+    """Update coordinates in a placemark."""
     pt = pm.find(".//kml:Point", KML_NS)
-    if pt is None:
-        raise ValueError("No Point element found in placemark")
-    
-    coords = pt.find("kml:coordinates", KML_NS)
-    if coords is None:
-        raise ValueError("No coordinates element found in Point")
-    
-    # Format coordinates with 7 decimal places for precision
-    old_coords = coords.text
-    new_coords = f"{lon:.7f},{lat:.7f},{alt:.2f}"
-    coords.text = new_coords
-    
-    return old_coords, new_coords
+    if pt is not None:
+        coords = pt.find("kml:coordinates", KML_NS)
+        if coords is not None:
+            coords.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
 
-# Streamlit UI
-st.title("QGIS → DJI WPML (KMZ) Mapper")
+st.title("QGIS → DJI WPML Converter")
+st.write("Convert QGIS waypoints to DJI drone mission format")
 
-st.markdown("""
-This application converts QGIS geographic point data to DJI drone waypoint mission files.
+# File uploaders
+seed = st.file_uploader("Upload seed KMZ from DJI Pilot 2", type=["kmz"])
+pts_file = st.file_uploader("Upload waypoints file (GeoJSON/JSON)", type=["geojson", "json"])
 
-**Instructions:**
-1. Upload a seed KMZ file exported from DJI Pilot 2
-2. Upload a GeoJSON file with point features from QGIS (WGS84 coordinate system)
-3. Click 'Build KMZ' to generate the waypoint mission file
-4. Download the generated KMZ file for use with your DJI drone
-""")
-
-# File upload section
-st.subheader("File Uploads")
-
-col1, col2 = st.columns(2)
-
+# Optional altitude override
+col1, col2 = st.columns([3, 1])
 with col1:
-    st.markdown("**Seed KMZ File**")
-    st.caption("Export from DJI Pilot 2 containing waylines.wpml")
-    seed = st.file_uploader(
-        "Choose seed KMZ file", 
-        type=["kmz"],
-        help="Upload a KMZ file exported from DJI Pilot 2 that contains the waylines.wpml template"
-    )
-
+    override_alt = st.checkbox("Override altitude for all waypoints")
 with col2:
-    st.markdown("**Points File**")
-    st.caption("GeoJSON with point features in WGS84")
-    pts_file = st.file_uploader(
-        "Choose points file", 
-        type=["geojson", "json"],
-        help="Upload a GeoJSON file containing point features with coordinates in WGS84 format"
-    )
+    if override_alt:
+        alt_value = st.number_input("Altitude (m)", value=30.0, min_value=0.0, max_value=500.0, step=1.0)
 
-# Processing section
-if seed and pts_file:
-    # Altitude override section
-    st.subheader("Altitude Settings")
-    
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        use_override = st.checkbox(
-            "Override altitude for all waypoints",
-            help="Check this to set the same altitude for all waypoints, ignoring any altitude data in the GeoJSON file"
-        )
-    
-    with col2:
-        if use_override:
-            altitude_override = st.number_input(
-                "Altitude (meters)",
-                min_value=0.0,
-                max_value=500.0,
-                value=7.0,
-                step=1.0,
-                format="%.1f",
-                help="Set the altitude in meters for all waypoints"
-            )
+if seed and pts_file and st.button("Convert to DJI Format", type="primary"):
+    try:
+        # Open the seed KMZ
+        zin = zipfile.ZipFile(seed)
+        
+        # Find waylines.wpml file
+        wpml_name = None
+        for name in zin.namelist():
+            if name.lower().endswith("waylines.wpml"):
+                wpml_name = name
+                break
+        
+        if not wpml_name:
+            st.error("❌ No waylines.wpml found in seed KMZ. Please use a KMZ exported from DJI Pilot 2.")
         else:
-            altitude_override = None
-    st.subheader("Process Files")
-    
-    if st.button("Build KMZ", type="primary"):
-        zin = None
-        try:
-            # Process the uploaded files
-            with st.spinner("Processing files..."):
-                # Open the seed KMZ file
-                zin = zipfile.ZipFile(seed)
+            # Parse the WPML file
+            root = ET.fromstring(zin.read(wpml_name))
+            
+            # Find all placemarks with points
+            placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
+            
+            # Extract points from GeoJSON
+            points = points_from_geojson(pts_file)
+            
+            # Apply altitude override if enabled
+            if override_alt:
+                points = [(lon, lat, alt_value) for lon, lat, _ in points]
+            
+            if len(points) < 2:
+                st.error("❌ Need at least 2 waypoints in GeoJSON file.")
+            else:
+                st.info(f"📍 Processing {len(points)} waypoints from GeoJSON")
+                st.info(f"📋 Found {len(placemarks)} placemarks in seed KMZ")
                 
-                # Find the waylines.wpml and template.kml files
-                wpml_files = [n for n in zin.namelist() if n.lower().endswith("waylines.wpml")]
-                kml_files = [n for n in zin.namelist() if n.lower().endswith("template.kml")]
+                # Find Document element
+                doc = root.find(".//kml:Document", KML_NS)
                 
-                wpml_name = None
-                kml_name = None
-                
-                if not wpml_files:
-                    st.error("❌ No waylines.wpml found in seed KMZ file. Please ensure you uploaded a valid DJI Pilot 2 KMZ export.")
+                if doc is None:
+                    st.error("❌ No Document element found in WPML file")
                 else:
-                    wpml_name = wpml_files[0]
-                    st.success(f"✅ Found waylines file: {wpml_name}")
-                    
-                    if kml_files:
-                        kml_name = kml_files[0]
-                        st.info(f"📍 Also found template file: {kml_name}")
-                    
-                    # Parse the XML content
-                    wpml_content = zin.read(wpml_name)
-                    root = ET.fromstring(wpml_content)
-                    
-                    # Debug: Show original file size
-                    st.info(f"📍 Original WPML file size: {len(wpml_content)} bytes")
-                    
-                    # Find all placemarks with points
-                    placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
-                    st.info(f"📍 Found {len(placemarks)} placemarks in original WPML")
-                    
-                    # Reset file pointer and extract points from GeoJSON
-                    pts_file.seek(0)
-                    points = points_from_geojson(pts_file, altitude_override)
-                    
-                    if len(points) < 2:
-                        st.error("❌ Need at least 2 points in the GeoJSON file to create a valid waypoint mission.")
-                    else:
-                        st.info(f"📍 Processing {len(points)} waypoints")
-                        
-                        st.info(f"📍 Found {len(placemarks)} existing placemarks, need {len(points)} waypoints")
-                        
-                        # Get the document element - it might be the root itself or a child
-                        document = root.find(".//kml:Document", KML_NS)
-                        if document is None:
-                            # Check if root itself is Document
-                            if root.tag == "{" + KML_NS["kml"] + "}Document":
-                                document = root
-                                st.info("📍 Root element is Document")
-                            else:
-                                # Try to find any Document element
-                                document = root.find(".//Document", None)
-                                if document is None:
-                                    st.error("❌ No Document element found in the KML structure")
-                                    raise ValueError("Invalid KML structure: missing Document element")
-                        
-                        # Adjust placemarks to match the number of points
-                        st.info("📍 Adjusting placemarks to match GeoJSON points")
-                        
-                        # Store a template for cloning
-                        template_placemark = placemarks[0] if placemarks else None
-                        
-                        # If we need more placemarks, clone the first one with ALL its structure
+                    # Adjust number of placemarks to match points
+                    if len(placemarks) < len(points):
+                        # Need to add more placemarks - clone the last one
+                        st.info(f"➕ Adding {len(points) - len(placemarks)} placemarks")
                         while len(placemarks) < len(points):
-                            # Deep copy the entire placemark with all WPML metadata
-                            clone_str = ET.tostring(template_placemark, encoding="unicode")
-                            clone = ET.fromstring(clone_str)
-                            
-                            # Find where to insert (after the last placemark)
-                            parent = None
-                            for elem in root.iter():
-                                if placemarks[-1] in elem:
-                                    parent = elem
-                                    # Find index and insert after
-                                    idx = list(elem).index(placemarks[-1])
-                                    elem.insert(idx + 1, clone)
-                                    break
-                            
-                            if parent is None:
-                                # Fallback: append to document
-                                document.append(clone)
-                            
+                            # Clone the last placemark
+                            clone = ET.fromstring(ET.tostring(placemarks[-1], encoding="utf-8"))
+                            doc.append(clone)
                             placemarks.append(clone)
-                            st.info(f"📍 Added placemark {len(placemarks)}")
-                        
-                        # If we have too many placemarks, remove extras
-                        while len(placemarks) > len(points):
-                            pm_to_remove = placemarks.pop()
-                            for elem in root.iter():
-                                try:
-                                    if pm_to_remove in elem:
-                                        elem.remove(pm_to_remove)
-                                        break
-                                except (ValueError, TypeError):
-                                    continue
-                            st.info(f"📍 Removed excess placemark")
-                        
-                        # Now update ONLY the coordinates, preserving everything else
-                        st.info("📍 Updating coordinates while preserving WPML metadata")
-                        updated_count = 0
-                        for pm, (lon, lat, alt) in zip(placemarks, points):
-                            # Find the Point/coordinates element
-                            point_elem = pm.find(".//kml:Point", KML_NS)
-                            if point_elem is not None:
-                                coords_elem = point_elem.find("kml:coordinates", KML_NS)
-                                if coords_elem is not None:
-                                    old_coords = coords_elem.text
-                                    coords_elem.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
-                                    updated_count += 1
-                                    st.info(f"📍 Updated waypoint {updated_count}: {coords_elem.text}")
-                        
-                        st.success(f"✅ Updated {updated_count} waypoint coordinates while preserving WPML structure")
-                        
-                        # Show the new coordinates
-                        with st.expander("View new waypoint coordinates", expanded=False):
-                            for i, (lon, lat, alt) in enumerate(points[:5]):
-                                st.text(f"Waypoint {i+1}: {lon:.7f},{lat:.7f},{alt:.2f}")
-                            if len(points) > 5:
-                                st.text(f"... and {len(points) - 5} more waypoints")
-                        
-                        # Verify the final state
-                        final_placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
-                        st.info(f"📍 Final XML contains {len(final_placemarks)} placemarks")
-                        
-                        # Verify coordinates match what we set
-                        with st.expander("Verify final XML state", expanded=False):
-                            for i, pm in enumerate(final_placemarks[:5]):
-                                pt = pm.find(".//kml:Point", KML_NS)
-                                if pt is not None:
-                                    coords = pt.find("kml:coordinates", KML_NS)
-                                    if coords is not None and coords.text:
-                                        expected = points[i] if i < len(points) else None
-                                        if expected:
-                                            expected_str = f"{expected[0]:.7f},{expected[1]:.7f},{expected[2]:.2f}"
-                                            actual = coords.text.strip()
-                                            match = "✅" if expected_str == actual else "❌"
-                                            st.text(f"Waypoint {i+1}: {actual} {match}")
-                        
-                        # Process template.kml if it exists
-                        template_root = None
-                        if kml_name:
-                            st.info(f"📍 Processing template.kml for Google Earth/QGIS compatibility")
-                            template_content = zin.read(kml_name)
-                            template_root = ET.fromstring(template_content)
-                            
-                            # Find and update placemarks in template.kml
-                            template_placemarks = template_root.findall(".//kml:Placemark[kml:Point]", KML_NS)
-                            st.info(f"📍 Found {len(template_placemarks)} placemarks in template.kml")
-                            
-                            # Find Document element in template
-                            template_doc = template_root.find(".//kml:Document", KML_NS)
-                            if template_doc is None:
-                                if template_root.tag == "{" + KML_NS["kml"] + "}Document":
-                                    template_doc = template_root
-                                else:
-                                    template_doc = template_root.find(".//Document", None)
-                            
-                            # Store template for cloning
-                            template_pm = template_placemarks[0] if template_placemarks else None
-                            
-                            # Re-fetch to get updated list
-                            template_placemarks = list(template_placemarks)  # Convert to list for mutation
-                            
-                            # Adjust number of placemarks
-                            while len(template_placemarks) < len(points):
-                                # Clone with all metadata
-                                clone_str = ET.tostring(template_pm, encoding="unicode")
-                                clone = ET.fromstring(clone_str)
-                                
-                                # Find insertion point
-                                parent = None
-                                for elem in template_root.iter():
-                                    if template_placemarks[-1] in elem:
-                                        parent = elem
-                                        idx = list(elem).index(template_placemarks[-1])
-                                        elem.insert(idx + 1, clone)
-                                        break
-                                
-                                if parent is None and template_doc is not None:
-                                    template_doc.append(clone)
-                                
-                                template_placemarks.append(clone)
-                            
-                            # Remove excess placemarks
-                            while len(template_placemarks) > len(points):
-                                pm_to_remove = template_placemarks.pop()
-                                for elem in template_root.iter():
-                                    try:
-                                        if pm_to_remove in elem:
-                                            elem.remove(pm_to_remove)
-                                            break
-                                    except (ValueError, TypeError):
-                                        continue
-                            
-                            # Update coordinates only
-                            updated = 0
-                            for pm, (lon, lat, alt) in zip(template_placemarks, points):
-                                point_elem = pm.find(".//kml:Point", KML_NS)
-                                if point_elem is not None:
-                                    coords_elem = point_elem.find("kml:coordinates", KML_NS)
-                                    if coords_elem is not None:
-                                        coords_elem.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
-                                        updated += 1
-                            
-                            st.success(f"✅ Updated template.kml with {updated} waypoints preserving metadata")
-                        
-                        # Create output KMZ file
-                        buf = io.BytesIO()
-                        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                            for name in zin.namelist():
-                                if name == wpml_name:
-                                    # Convert the modified waylines.wpml to bytes
-                                    modified_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-                                    st.info(f"📍 Writing modified waylines.wpml ({len(modified_xml)} bytes)")
-                                    zout.writestr(name, modified_xml)
-                                elif kml_name and name == kml_name and template_root is not None:
-                                    # Write modified template.kml
-                                    modified_template = ET.tostring(template_root, encoding="utf-8", xml_declaration=True)
-                                    st.info(f"📍 Writing modified template.kml ({len(modified_template)} bytes)")
-                                    zout.writestr(name, modified_template)
-                                else:
-                                    # Copy other files unchanged
-                                    zout.writestr(name, zin.read(name))
-                        
-                        # Ensure buffer is at the beginning for download
-                        buf.seek(0)
-                        
-                        st.success("✅ KMZ file generated successfully!")
-                        
-                        # Provide download button
-                        st.download_button(
-                            label="📥 Download KMZ Mission File",
-                            data=buf.getvalue(),
-                            file_name="mission_from_qgis.kmz",
-                            mime="application/vnd.google-earth.kmz",
-                            help="Download the generated KMZ file and import it into DJI Pilot 2"
-                        )
-                        
-                        # Display summary information
-                        st.subheader("Mission Summary")
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("Waypoints", len(points))
-                        
-                        with col2:
-                            avg_alt = sum(alt for _, _, alt in points) / len(points)
-                            st.metric("Avg Altitude", f"{avg_alt:.1f}m")
-                        
-                        with col3:
-                            min_alt = min(alt for _, _, alt in points)
-                            max_alt = max(alt for _, _, alt in points)
-                            st.metric("Altitude Range", f"{min_alt:.1f}m - {max_alt:.1f}m")
-                
-        except json.JSONDecodeError:
-            st.error("❌ Invalid GeoJSON file. Please check the file format and try again.")
-        except ET.ParseError:
-            st.error("❌ Invalid XML content in KMZ file. Please ensure you uploaded a valid DJI KMZ file.")
-        except Exception as e:
-            st.error(f"❌ An error occurred during processing: {str(e)}")
-        finally:
-            # Clean up file handles
-            if zin is not None:
-                zin.close()
-
-else:
-    st.info("👆 Please upload both files to begin processing")
-
-# Footer with additional information
-st.markdown("---")
-st.markdown("""
-**Note:** This tool requires:
-- A seed KMZ file exported from DJI Pilot 2 (containing waylines.wpml)
-- A GeoJSON file with point features in WGS84 coordinate system
-- Points should include altitude information in the properties as 'alt_m' (defaults to 30m if not specified)
-""")
+                    
+                    elif len(placemarks) > len(points):
+                        # Need to remove extra placemarks
+                        st.info(f"➖ Removing {len(placemarks) - len(points)} excess placemarks")
+                        for _ in range(len(placemarks) - len(points)):
+                            doc.remove(placemarks.pop())
+                    
+                    # Update coordinates for each placemark
+                    st.info("🔄 Updating waypoint coordinates...")
+                    for i, (pm, (lon, lat, alt)) in enumerate(zip(placemarks, points)):
+                        set_coords(pm, lon, lat, alt)
+                        if i < 5:  # Show first 5 for confirmation
+                            st.text(f"   Waypoint {i+1}: {lon:.7f}, {lat:.7f}, {alt:.2f}m")
+                    
+                    if len(points) > 5:
+                        st.text(f"   ... and {len(points) - 5} more waypoints")
+                    
+                    # Create output KMZ
+                    buf = io.BytesIO()
+                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+                        for name in zin.namelist():
+                            if name == wpml_name:
+                                # Write the modified WPML
+                                zout.writestr(name, ET.tostring(root, encoding="utf-8", xml_declaration=True))
+                            else:
+                                # Copy all other files as-is
+                                zout.writestr(name, zin.read(name))
+                    
+                    # Success!
+                    st.success(f"✅ Successfully converted {len(points)} waypoints to DJI format!")
+                    
+                    # Download button
+                    st.download_button(
+                        label="📥 Download Modified KMZ",
+                        data=buf.getvalue(),
+                        file_name="mission_from_qgis.kmz",
+                        mime="application/vnd.google-earth.kmz"
+                    )
+    
+    except json.JSONDecodeError:
+        st.error("❌ Invalid JSON/GeoJSON file. Please check the file format.")
+    except Exception as e:
+        st.error(f"❌ Error processing files: {str(e)}")
+        st.exception(e)

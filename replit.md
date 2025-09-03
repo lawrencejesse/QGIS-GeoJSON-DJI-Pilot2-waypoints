@@ -12,23 +12,24 @@ Preferred communication style: Simple, everyday language.
 - **Streamlit Framework**: Single-page web application with file upload interface
 - **User Interface Components**: 
   - File uploaders for seed KMZ and GeoJSON input files
+  - Optional altitude override control
   - Processing button to trigger conversion
   - Error handling and status messages
 
 ## Backend Architecture
-- **Python-based Processing Engine**: Core logic handles file parsing and coordinate transformation
-- **Modular Function Design**: 
+- **Python-based Processing Engine**: Streamlined logic for WPML manipulation
+- **Function Design**: 
   - `points_from_geojson()`: Extracts coordinates from GeoJSON features
-  - `set_coords()`: Updates KML placemark coordinates
-- **XML Processing**: Uses ElementTree for KML manipulation with proper namespace handling
-- **Archive Management**: ZIP/KMZ file handling for input parsing and output generation
+  - `set_coords()`: Updates placemark coordinates in-place
+- **XML Processing**: Direct manipulation of waylines.wpml with namespace preservation
+- **Archive Management**: Preserves all original KMZ files, only modifying waylines.wpml
 
 ## Data Processing Pipeline
-1. **Input Validation**: Checks for required files and minimum waypoint count
+1. **Input Validation**: Checks for waylines.wpml and minimum waypoint count
 2. **Coordinate Extraction**: Parses GeoJSON point features with altitude support
-3. **KML Manipulation**: Dynamically adjusts placemark count to match input points
-4. **Precision Formatting**: Coordinates formatted to 7 decimal places for accuracy
-5. **Archive Generation**: Outputs modified KMZ file maintaining DJI format compliance
+3. **Placemark Adjustment**: Clones or removes placemarks to match point count
+4. **Coordinate Update**: In-place modification preserving all WPML metadata
+5. **Archive Generation**: Outputs KMZ with modified waylines.wpml, preserving all other files
 
 ## File Format Support
 - **Input Formats**: KMZ (seed files), GeoJSON/JSON (waypoint data)
