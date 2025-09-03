@@ -167,8 +167,12 @@ if seed and pts_file:
                         # Resize placemark list to match number of points
                         # Add placemarks if we have more points than existing placemarks
                         while len(placemarks) < len(points):
-                            # Clone the last placemark using copy.deepcopy for better cloning
-                            clone = copy.deepcopy(placemarks[-1])
+                            # Clone the last placemark - use ET to properly clone the element
+                            last_pm_str = ET.tostring(placemarks[-1], encoding="unicode")
+                            clone = ET.fromstring(last_pm_str)
+                            # Important: Register the namespace for the cloned element
+                            for prefix, uri in {"": KML_NS["kml"]}.items():
+                                ET.register_namespace(prefix, uri)
                             document.append(clone)
                             placemarks.append(clone)
                         
@@ -182,6 +186,10 @@ if seed and pts_file:
                         # Re-fetch placemarks after modifications to ensure we have correct references
                         placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
                         st.info(f"📍 Re-fetched {len(placemarks)} placemarks for coordinate updates")
+                        
+                        # Verify we have the right number of placemarks in the document
+                        all_placemarks_in_doc = document.findall(".//kml:Placemark[kml:Point]", KML_NS)
+                        st.info(f"📍 Document contains {len(all_placemarks_in_doc)} placemarks total")
                         
                         # Update coordinates for each placemark
                         coord_updates = []
@@ -202,13 +210,28 @@ if seed and pts_file:
                         
                         st.success(f"✅ Replaced {len(coord_updates)} waypoint coordinates with GeoJSON data")
                         
+                        # Verify the changes are in the XML tree before saving
+                        final_placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
+                        st.info(f"📍 Final XML contains {len(final_placemarks)} placemarks before saving")
+                        
+                        # Debug: Show first few coordinates in the final XML
+                        with st.expander("Verify final coordinates in XML", expanded=False):
+                            for i, pm in enumerate(final_placemarks[:5]):
+                                pt = pm.find(".//kml:Point", KML_NS)
+                                if pt is not None:
+                                    coords = pt.find("kml:coordinates", KML_NS)
+                                    if coords is not None and coords.text:
+                                        st.text(f"Placemark {i+1}: {coords.text.strip()}")
+                        
                         # Create output KMZ file
                         buf = io.BytesIO()
                         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
                             for name in zin.namelist():
                                 if name == wpml_name:
-                                    # Write updated waylines.wpml
-                                    zout.writestr(name, ET.tostring(root, encoding="utf-8", xml_declaration=True))
+                                    # Convert the modified XML tree to bytes
+                                    modified_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+                                    st.info(f"📍 Writing modified XML ({len(modified_xml)} bytes) to {wpml_name}")
+                                    zout.writestr(name, modified_xml)
                                 else:
                                     # Copy other files unchanged
                                     zout.writestr(name, zin.read(name))
