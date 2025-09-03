@@ -3,6 +3,7 @@ import zipfile
 import io
 import json
 import xml.etree.ElementTree as ET
+import copy
 
 # KML namespace for XML parsing
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
@@ -135,7 +136,8 @@ if seed and pts_file:
                     root = ET.fromstring(zin.read(wpml_name))
                     placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
                     
-                    # Extract points from GeoJSON
+                    # Reset file pointer and extract points from GeoJSON
+                    pts_file.seek(0)
                     points = points_from_geojson(pts_file, altitude_override)
                     
                     if len(points) < 2:
@@ -143,21 +145,31 @@ if seed and pts_file:
                     else:
                         st.info(f"📍 Processing {len(points)} waypoints")
                         
+                        st.info(f"📍 Found {len(placemarks)} existing placemarks, need {len(points)} waypoints")
+                        
+                        # Get the document element to add/remove placemarks
+                        document = root.find(".//kml:Document", KML_NS)
+                        
                         # Resize placemark list to match number of points
                         # Add placemarks if we have more points than existing placemarks
                         while len(placemarks) < len(points):
-                            # Clone the last placemark
-                            clone = ET.fromstring(ET.tostring(placemarks[-1], encoding="utf-8"))
-                            root.find(".//kml:Document", KML_NS).append(clone)
+                            # Clone the last placemark using copy.deepcopy for better cloning
+                            clone = copy.deepcopy(placemarks[-1])
+                            document.append(clone)
                             placemarks.append(clone)
                         
                         # Remove excess placemarks if we have fewer points
                         for _ in range(len(placemarks) - len(points)):
-                            root.find(".//kml:Document", KML_NS).remove(placemarks.pop())
+                            placemark_to_remove = placemarks.pop()
+                            document.remove(placemark_to_remove)
+                        
+                        st.info(f"📍 Updated to {len(placemarks)} placemarks")
                         
                         # Update coordinates for each placemark
-                        for pm, (lon, lat, alt) in zip(placemarks, points):
+                        for i, (pm, (lon, lat, alt)) in enumerate(zip(placemarks, points)):
                             set_coords(pm, lon, lat, alt)
+                            
+                        st.success(f"✅ Updated {len(points)} waypoint coordinates")
                         
                         # Create output KMZ file
                         buf = io.BytesIO()
