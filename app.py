@@ -185,15 +185,23 @@ if seed and pts_file:
                         # Clear all existing placemarks and create new ones from scratch
                         st.info("📍 Clearing existing placemarks and creating new ones")
                         
-                        # Remove all existing placemarks
+                        # Store template before removing
+                        template_placemark = placemarks[0] if placemarks else None
+                        
+                        # Remove all existing placemarks - find their actual parents
                         for pm in placemarks:
-                            parent = pm.getparent() if hasattr(pm, 'getparent') else document
-                            if parent is not None:
-                                parent.remove(pm)
+                            # Search through all elements to find the parent
+                            for elem in root.iter():
+                                try:
+                                    if pm in elem:
+                                        elem.remove(pm)
+                                        break
+                                except (ValueError, TypeError):
+                                    # Element not in this parent, continue searching
+                                    continue
                         
                         # Create new placemarks for each point
                         new_placemarks = []
-                        template_placemark = placemarks[0] if placemarks else None
                         
                         for i, (lon, lat, alt) in enumerate(points):
                             # Create new placemark element
