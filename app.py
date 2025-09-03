@@ -48,9 +48,19 @@ def set_coords(pm, lon, lat, alt):
         alt: Altitude in meters
     """
     pt = pm.find(".//kml:Point", KML_NS)
+    if pt is None:
+        raise ValueError("No Point element found in placemark")
+    
     coords = pt.find("kml:coordinates", KML_NS)
+    if coords is None:
+        raise ValueError("No coordinates element found in Point")
+    
     # Format coordinates with 7 decimal places for precision
-    coords.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+    old_coords = coords.text
+    new_coords = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+    coords.text = new_coords
+    
+    return old_coords, new_coords
 
 # Streamlit UI
 st.title("QGIS → DJI WPML (KMZ) Mapper")
@@ -117,6 +127,7 @@ if seed and pts_file:
     st.subheader("Process Files")
     
     if st.button("Build KMZ", type="primary"):
+        zin = None
         try:
             # Process the uploaded files
             with st.spinner("Processing files..."):
@@ -149,6 +160,9 @@ if seed and pts_file:
                         
                         # Get the document element to add/remove placemarks
                         document = root.find(".//kml:Document", KML_NS)
+                        if document is None:
+                            st.error("❌ No Document element found in the KML structure")
+                            raise ValueError("Invalid KML structure: missing Document element")
                         
                         # Resize placemark list to match number of points
                         # Add placemarks if we have more points than existing placemarks
@@ -163,13 +177,30 @@ if seed and pts_file:
                             placemark_to_remove = placemarks.pop()
                             document.remove(placemark_to_remove)
                         
-                        st.info(f"📍 Updated to {len(placemarks)} placemarks")
+                        st.info(f"📍 Adjusted to {len(placemarks)} placemarks")
+                        
+                        # Re-fetch placemarks after modifications to ensure we have correct references
+                        placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
+                        st.info(f"📍 Re-fetched {len(placemarks)} placemarks for coordinate updates")
                         
                         # Update coordinates for each placemark
+                        coord_updates = []
                         for i, (pm, (lon, lat, alt)) in enumerate(zip(placemarks, points)):
-                            set_coords(pm, lon, lat, alt)
-                            
-                        st.success(f"✅ Updated {len(points)} waypoint coordinates")
+                            try:
+                                old_coords, new_coords = set_coords(pm, lon, lat, alt)
+                                old_coords_str = old_coords.strip() if old_coords else "None"
+                                coord_updates.append(f"Waypoint {i+1}: {old_coords_str} → {new_coords}")
+                            except Exception as e:
+                                st.error(f"Error updating waypoint {i+1}: {str(e)}")
+                        
+                        # Show coordinate updates in expander
+                        with st.expander("View coordinate updates", expanded=False):
+                            for update in coord_updates[:5]:  # Show first 5 updates
+                                st.text(update)
+                            if len(coord_updates) > 5:
+                                st.text(f"... and {len(coord_updates) - 5} more waypoints")
+                        
+                        st.success(f"✅ Replaced {len(coord_updates)} waypoint coordinates with GeoJSON data")
                         
                         # Create output KMZ file
                         buf = io.BytesIO()
@@ -217,7 +248,7 @@ if seed and pts_file:
             st.error(f"❌ An error occurred during processing: {str(e)}")
         finally:
             # Clean up file handles
-            if 'zin' in locals():
+            if zin is not None:
                 zin.close()
 
 else:
