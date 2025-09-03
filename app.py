@@ -8,12 +8,13 @@ import xml.etree.ElementTree as ET
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
 ET.register_namespace("", KML_NS["kml"])
 
-def points_from_geojson(file):
+def points_from_geojson(file, altitude_override=None):
     """
     Extract point coordinates from a GeoJSON file.
     
     Args:
         file: Uploaded GeoJSON file object
+        altitude_override: Optional altitude to use for all points (meters)
         
     Returns:
         list: List of tuples containing (longitude, latitude, altitude)
@@ -24,8 +25,13 @@ def points_from_geojson(file):
     for f in gj["features"]:
         if f["geometry"]["type"].lower() == "point":
             lon, lat = f["geometry"]["coordinates"][:2]
-            # Get altitude from properties, default to 30m if not specified
-            alt = float(f.get("properties", {}).get("alt_m", 30))
+            
+            if altitude_override is not None:
+                alt = float(altitude_override)
+            else:
+                # Get altitude from properties, default to 30m if not specified
+                alt = float(f.get("properties", {}).get("alt_m", 30))
+            
             pts.append((lon, lat, alt))
     
     return pts
@@ -83,6 +89,30 @@ with col2:
 
 # Processing section
 if seed and pts_file:
+    # Altitude override section
+    st.subheader("Altitude Settings")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        use_override = st.checkbox(
+            "Override altitude for all waypoints",
+            help="Check this to set the same altitude for all waypoints, ignoring any altitude data in the GeoJSON file"
+        )
+    
+    with col2:
+        if use_override:
+            altitude_override = st.number_input(
+                "Altitude (meters)",
+                min_value=0.0,
+                max_value=500.0,
+                value=7.0,
+                step=1.0,
+                format="%.1f",
+                help="Set the altitude in meters for all waypoints"
+            )
+        else:
+            altitude_override = None
     st.subheader("Process Files")
     
     if st.button("Build KMZ", type="primary"):
@@ -106,7 +136,7 @@ if seed and pts_file:
                     placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
                     
                     # Extract points from GeoJSON
-                    points = points_from_geojson(pts_file)
+                    points = points_from_geojson(pts_file, altitude_override)
                     
                     if len(points) < 2:
                         st.error("❌ Need at least 2 points in the GeoJSON file to create a valid waypoint mission.")
