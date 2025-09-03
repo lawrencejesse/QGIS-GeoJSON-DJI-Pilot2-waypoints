@@ -1,0 +1,56 @@
+import streamlit as st, zipfile, io, json, xml.etree.ElementTree as ET
+
+KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
+ET.register_namespace("", KML_NS["kml"])
+
+def points_from_geojson(file):
+    gj = json.load(file)
+    pts = []
+    for f in gj["features"]:
+        if f["geometry"]["type"].lower() == "point":
+            lon, lat = f["geometry"]["coordinates"][:2]
+            alt = float(f.get("properties", {}).get("alt_m", 30))
+            pts.append((lon, lat, alt))
+    return pts
+
+def set_coords(pm, lon, lat, alt):
+    pt = pm.find(".//kml:Point", KML_NS)
+    coords = pt.find("kml:coordinates", KML_NS)
+    coords.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+
+st.title("QGIS → DJI WPML (KMZ) mapper")
+
+seed = st.file_uploader("Seed KMZ from DJI Pilot 2", type=["kmz"])
+pts_file = st.file_uploader("Points (GeoJSON, WGS84)", type=["geojson","json"])
+if seed and pts_file and st.button("Build KMZ"):
+    zin = zipfile.ZipFile(seed)
+    wpml_name = [n for n in zin.namelist() if n.lower().endswith("waylines.wpml")]
+    if not wpml_name:
+        st.error("No waylines.wpml found in seed KMZ.")
+    else:
+        wpml_name = wpml_name[0]
+        root = ET.fromstring(zin.read(wpml_name))
+        placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
+        points = points_from_geojson(pts_file)
+        if len(points) < 2:
+            st.error("Need ≥2 points.")
+        else:
+            # Resize placemark list
+            while len(placemarks) < len(points):
+                clone = ET.fromstring(ET.tostring(placemarks[-1], encoding="utf-8"))
+                root.find(".//kml:Document", KML_NS).append(clone)
+                placemarks.append(clone)
+            for _ in range(len(placemarks) - len(points)):
+                root.find(".//kml:Document", KML_NS).remove(placemarks.pop())
+
+            for pm, (lon,lat,alt) in zip(placemarks, points):
+                set_coords(pm, lon, lat, alt)
+
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+                for name in zin.namelist():
+                    if name == wpml_name:
+                        zout.writestr(name, ET.tostring(root, encoding="utf-8", xml_declaration=True))
+                    else:
+                        zout.writestr(name, zin.read(name))
+            st.download_button("Download KMZ", buf.getvalue(), file_name="mission_from_qgis.kmz")
