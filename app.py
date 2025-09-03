@@ -137,14 +137,22 @@ if seed and pts_file:
                 # Open the seed KMZ file
                 zin = zipfile.ZipFile(seed)
                 
-                # Find the waylines.wpml file
-                wpml_name = [n for n in zin.namelist() if n.lower().endswith("waylines.wpml")]
+                # Find the waylines.wpml and template.kml files
+                wpml_files = [n for n in zin.namelist() if n.lower().endswith("waylines.wpml")]
+                kml_files = [n for n in zin.namelist() if n.lower().endswith("template.kml")]
                 
-                if not wpml_name:
+                wpml_name = None
+                kml_name = None
+                
+                if not wpml_files:
                     st.error("❌ No waylines.wpml found in seed KMZ file. Please ensure you uploaded a valid DJI Pilot 2 KMZ export.")
                 else:
-                    wpml_name = wpml_name[0]
+                    wpml_name = wpml_files[0]
                     st.success(f"✅ Found waylines file: {wpml_name}")
+                    
+                    if kml_files:
+                        kml_name = kml_files[0]
+                        st.info(f"📍 Also found template file: {kml_name}")
                     
                     # Parse the XML content
                     wpml_content = zin.read(wpml_name)
@@ -251,15 +259,73 @@ if seed and pts_file:
                                             match = "✅" if expected_str == actual else "❌"
                                             st.text(f"Waypoint {i+1}: {actual} {match}")
                         
+                        # Process template.kml if it exists
+                        template_root = None
+                        if kml_name:
+                            st.info(f"📍 Processing template.kml for Google Earth/QGIS compatibility")
+                            template_content = zin.read(kml_name)
+                            template_root = ET.fromstring(template_content)
+                            
+                            # Find and update placemarks in template.kml
+                            template_placemarks = template_root.findall(".//kml:Placemark[kml:Point]", KML_NS)
+                            st.info(f"📍 Found {len(template_placemarks)} placemarks in template.kml")
+                            
+                            # Clear existing placemarks in template
+                            for pm in template_placemarks:
+                                for elem in template_root.iter():
+                                    try:
+                                        if pm in elem:
+                                            elem.remove(pm)
+                                            break
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            # Find Document element in template
+                            template_doc = template_root.find(".//kml:Document", KML_NS)
+                            if template_doc is None:
+                                if template_root.tag == "{" + KML_NS["kml"] + "}Document":
+                                    template_doc = template_root
+                                else:
+                                    template_doc = template_root.find(".//Document", None)
+                            
+                            # Add new placemarks to template
+                            if template_doc is not None:
+                                for i, (lon, lat, alt) in enumerate(points):
+                                    placemark = ET.SubElement(template_doc, "{" + KML_NS["kml"] + "}Placemark")
+                                    
+                                    # Add name
+                                    name_elem = ET.SubElement(placemark, "{" + KML_NS["kml"] + "}name")
+                                    name_elem.text = f"Waypoint {i+1}"
+                                    
+                                    # Add Point element
+                                    point = ET.SubElement(placemark, "{" + KML_NS["kml"] + "}Point")
+                                    
+                                    # Add coordinates
+                                    coords = ET.SubElement(point, "{" + KML_NS["kml"] + "}coordinates")
+                                    coords.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+                                    
+                                    # Copy style from template if available
+                                    if template_placemarks and len(template_placemarks) > 0:
+                                        for child in template_placemarks[0]:
+                                            if child.tag.endswith("Style") or child.tag.endswith("styleUrl"):
+                                                placemark.append(copy.deepcopy(child))
+                                
+                                st.success(f"✅ Updated template.kml with {len(points)} waypoints")
+                        
                         # Create output KMZ file
                         buf = io.BytesIO()
                         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
                             for name in zin.namelist():
                                 if name == wpml_name:
-                                    # Convert the modified XML tree to bytes
+                                    # Convert the modified waylines.wpml to bytes
                                     modified_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-                                    st.info(f"📍 Writing modified XML ({len(modified_xml)} bytes) to {wpml_name}")
+                                    st.info(f"📍 Writing modified waylines.wpml ({len(modified_xml)} bytes)")
                                     zout.writestr(name, modified_xml)
+                                elif kml_name and name == kml_name and template_root is not None:
+                                    # Write modified template.kml
+                                    modified_template = ET.tostring(template_root, encoding="utf-8", xml_declaration=True)
+                                    st.info(f"📍 Writing modified template.kml ({len(modified_template)} bytes)")
+                                    zout.writestr(name, modified_template)
                                 else:
                                     # Copy other files unchanged
                                     zout.writestr(name, zin.read(name))
