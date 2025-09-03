@@ -7,7 +7,10 @@ import copy
 
 # KML namespace for XML parsing
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
+# WPML may also use the wpml namespace
+WPML_NS = {"wpml": "http://www.dji.com/wpml/1.0.2"}
 ET.register_namespace("", KML_NS["kml"])
+ET.register_namespace("wpml", WPML_NS["wpml"])
 
 def points_from_geojson(file, altitude_override=None):
     """
@@ -144,8 +147,15 @@ if seed and pts_file:
                     st.success(f"✅ Found waylines file: {wpml_name}")
                     
                     # Parse the XML content
-                    root = ET.fromstring(zin.read(wpml_name))
+                    wpml_content = zin.read(wpml_name)
+                    root = ET.fromstring(wpml_content)
+                    
+                    # Debug: Show original file size
+                    st.info(f"📍 Original WPML file size: {len(wpml_content)} bytes")
+                    
+                    # Find all placemarks with points
                     placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
+                    st.info(f"📍 Found {len(placemarks)} placemarks in original WPML")
                     
                     # Reset file pointer and extract points from GeoJSON
                     pts_file.seek(0)
@@ -158,70 +168,80 @@ if seed and pts_file:
                         
                         st.info(f"📍 Found {len(placemarks)} existing placemarks, need {len(points)} waypoints")
                         
-                        # Get the document element to add/remove placemarks
+                        # Get the document element - it might be the root itself or a child
                         document = root.find(".//kml:Document", KML_NS)
                         if document is None:
-                            st.error("❌ No Document element found in the KML structure")
-                            raise ValueError("Invalid KML structure: missing Document element")
+                            # Check if root itself is Document
+                            if root.tag == "{" + KML_NS["kml"] + "}Document":
+                                document = root
+                                st.info("📍 Root element is Document")
+                            else:
+                                # Try to find any Document element
+                                document = root.find(".//Document", None)
+                                if document is None:
+                                    st.error("❌ No Document element found in the KML structure")
+                                    raise ValueError("Invalid KML structure: missing Document element")
                         
-                        # Resize placemark list to match number of points
-                        # Add placemarks if we have more points than existing placemarks
-                        while len(placemarks) < len(points):
-                            # Clone the last placemark - use ET to properly clone the element
-                            last_pm_str = ET.tostring(placemarks[-1], encoding="unicode")
-                            clone = ET.fromstring(last_pm_str)
-                            # Important: Register the namespace for the cloned element
-                            for prefix, uri in {"": KML_NS["kml"]}.items():
-                                ET.register_namespace(prefix, uri)
-                            document.append(clone)
-                            placemarks.append(clone)
+                        # Clear all existing placemarks and create new ones from scratch
+                        st.info("📍 Clearing existing placemarks and creating new ones")
                         
-                        # Remove excess placemarks if we have fewer points
-                        for _ in range(len(placemarks) - len(points)):
-                            placemark_to_remove = placemarks.pop()
-                            document.remove(placemark_to_remove)
+                        # Remove all existing placemarks
+                        for pm in placemarks:
+                            parent = pm.getparent() if hasattr(pm, 'getparent') else document
+                            if parent is not None:
+                                parent.remove(pm)
                         
-                        st.info(f"📍 Adjusted to {len(placemarks)} placemarks")
+                        # Create new placemarks for each point
+                        new_placemarks = []
+                        template_placemark = placemarks[0] if placemarks else None
                         
-                        # Re-fetch placemarks after modifications to ensure we have correct references
-                        placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
-                        st.info(f"📍 Re-fetched {len(placemarks)} placemarks for coordinate updates")
+                        for i, (lon, lat, alt) in enumerate(points):
+                            # Create new placemark element
+                            placemark = ET.SubElement(document, "{" + KML_NS["kml"] + "}Placemark")
+                            
+                            # Add Point element
+                            point = ET.SubElement(placemark, "{" + KML_NS["kml"] + "}Point")
+                            
+                            # Add coordinates
+                            coords = ET.SubElement(point, "{" + KML_NS["kml"] + "}coordinates")
+                            coords.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+                            
+                            # If we have a template, copy other elements (like name, style, etc.)
+                            if template_placemark is not None:
+                                for child in template_placemark:
+                                    if not child.tag.endswith("Point"):
+                                        placemark.append(copy.deepcopy(child))
+                            
+                            new_placemarks.append(placemark)
                         
-                        # Verify we have the right number of placemarks in the document
-                        all_placemarks_in_doc = document.findall(".//kml:Placemark[kml:Point]", KML_NS)
-                        st.info(f"📍 Document contains {len(all_placemarks_in_doc)} placemarks total")
+                        placemarks = new_placemarks
                         
-                        # Update coordinates for each placemark
-                        coord_updates = []
-                        for i, (pm, (lon, lat, alt)) in enumerate(zip(placemarks, points)):
-                            try:
-                                old_coords, new_coords = set_coords(pm, lon, lat, alt)
-                                old_coords_str = old_coords.strip() if old_coords else "None"
-                                coord_updates.append(f"Waypoint {i+1}: {old_coords_str} → {new_coords}")
-                            except Exception as e:
-                                st.error(f"Error updating waypoint {i+1}: {str(e)}")
+                        st.success(f"✅ Created {len(placemarks)} new placemarks with GeoJSON coordinates")
                         
-                        # Show coordinate updates in expander
-                        with st.expander("View coordinate updates", expanded=False):
-                            for update in coord_updates[:5]:  # Show first 5 updates
-                                st.text(update)
-                            if len(coord_updates) > 5:
-                                st.text(f"... and {len(coord_updates) - 5} more waypoints")
+                        # Show the new coordinates
+                        with st.expander("View new waypoint coordinates", expanded=False):
+                            for i, (lon, lat, alt) in enumerate(points[:5]):
+                                st.text(f"Waypoint {i+1}: {lon:.7f},{lat:.7f},{alt:.2f}")
+                            if len(points) > 5:
+                                st.text(f"... and {len(points) - 5} more waypoints")
                         
-                        st.success(f"✅ Replaced {len(coord_updates)} waypoint coordinates with GeoJSON data")
-                        
-                        # Verify the changes are in the XML tree before saving
+                        # Verify the final state
                         final_placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
-                        st.info(f"📍 Final XML contains {len(final_placemarks)} placemarks before saving")
+                        st.info(f"📍 Final XML contains {len(final_placemarks)} placemarks")
                         
-                        # Debug: Show first few coordinates in the final XML
-                        with st.expander("Verify final coordinates in XML", expanded=False):
+                        # Verify coordinates match what we set
+                        with st.expander("Verify final XML state", expanded=False):
                             for i, pm in enumerate(final_placemarks[:5]):
                                 pt = pm.find(".//kml:Point", KML_NS)
                                 if pt is not None:
                                     coords = pt.find("kml:coordinates", KML_NS)
                                     if coords is not None and coords.text:
-                                        st.text(f"Placemark {i+1}: {coords.text.strip()}")
+                                        expected = points[i] if i < len(points) else None
+                                        if expected:
+                                            expected_str = f"{expected[0]:.7f},{expected[1]:.7f},{expected[2]:.2f}"
+                                            actual = coords.text.strip()
+                                            match = "✅" if expected_str == actual else "❌"
+                                            st.text(f"Waypoint {i+1}: {actual} {match}")
                         
                         # Create output KMZ file
                         buf = io.BytesIO()
@@ -235,6 +255,9 @@ if seed and pts_file:
                                 else:
                                     # Copy other files unchanged
                                     zout.writestr(name, zin.read(name))
+                        
+                        # Ensure buffer is at the beginning for download
+                        buf.seek(0)
                         
                         st.success("✅ KMZ file generated successfully!")
                         
