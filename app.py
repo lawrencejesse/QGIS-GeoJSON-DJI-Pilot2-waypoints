@@ -185,3 +185,10 @@ if seed and pts_file and st.button("Build KMZ", type="primary"):
     except Exception as e:
         st.error(f"An error occurred: {e}")
         st.exception(e)
+
+# --- Footer ---
+st.markdown("---")
+st.markdown(
+    "© Created by Jesse Lawrence / Broken Arrow Consulting ~ Feeling Optimistic on AI and The Future.",
+    unsafe_allow_html=True
+)
