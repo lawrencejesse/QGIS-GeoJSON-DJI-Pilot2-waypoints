@@ -1,5 +1,7 @@
 import streamlit as st
 import zipfile, io, json, xml.etree.ElementTree as ET
+import time
+from datetime import datetime, timedelta
 
 # --- Constants and Namespace Setup ---
 KML_URI = "http://www.opengis.net/kml/2.2"
@@ -129,7 +131,45 @@ with c1:
 with c2:
     alt_value = st.number_input("Altitude (m rel. to takeoff)", 0.0, 1200.0, 30.0, 1.0)
 
-if seed and pts_file and st.button("Build KMZ", type="primary"):
+# Simple verification
+verification = st.selectbox(
+    "✅ Verification: What type of aircraft is this tool designed for?",
+    ["", "Fixed-wing aircraft", "DJI drones", "Helicopters", "Hot air balloons"],
+    help="Select the correct answer to proceed"
+)
+
+# Validate file sizes
+max_kmz_size = 10 * 1024 * 1024  # 10MB
+max_geojson_size = 5 * 1024 * 1024  # 5MB
+
+if seed and seed.size > max_kmz_size:
+    st.error("KMZ file too large. Maximum size is 10MB.")
+    st.stop()
+
+if pts_file and pts_file.size > max_geojson_size:
+    st.error("GeoJSON file too large. Maximum size is 5MB.")
+    st.stop()
+
+if seed and pts_file and verification == "DJI drones" and st.button("Build KMZ", type="primary"):
+    # Rate limiting - max 3 conversions per 5 minutes per session
+    if 'last_conversions' not in st.session_state:
+        st.session_state.last_conversions = []
+    
+    # Clean old timestamps
+    now = datetime.now()
+    st.session_state.last_conversions = [
+        ts for ts in st.session_state.last_conversions 
+        if now - ts < timedelta(minutes=5)
+    ]
+    
+    # Check rate limit
+    if len(st.session_state.last_conversions) >= 3:
+        st.error("⚠️ Rate limit exceeded. Please wait 5 minutes between conversions.")
+        st.stop()
+    
+    # Add current timestamp
+    st.session_state.last_conversions.append(now)
+    
     try:
         zin = zipfile.ZipFile(seed, "r")
 
@@ -150,6 +190,9 @@ if seed and pts_file and st.button("Build KMZ", type="primary"):
         points = points_from_geojson(pts_file, default_alt=alt_value)
         if len(points) < 2:
             st.error("GeoJSON must contain at least 2 Point features.")
+            st.stop()
+        if len(points) > 1000:  # DJI missions rarely need more than 1000 waypoints
+            st.error("Too many waypoints. Maximum supported is 1000 points.")
             st.stop()
         if override_alt:
             points = [(lon, lat, alt_value) for lon, lat, _ in points]
