@@ -13,8 +13,13 @@ Planning complex drone missions in DJI Pilot 2 can be limiting for precision wor
 
 - Plan detailed waypoint missions in **QGIS** with full GIS capabilities
 - Export waypoints as **GeoJSON** from QGIS
-- Convert them into **DJI Pilot 2**-ready KMZ files
-- Maintain all DJI mission metadata and flight parameters
+- Convert them into **DJI Pilot 2**-ready KMZ files  that can be uploaded to your controller and opened in DJI Pilot 2
+- Maintain all DJI mission metadata and flight parameters.
+
+## Intended Use
+- I'm really interested in using Drones as "point sampling tool". Using low altitude NADIR drone photos to collect images from pastures, crop, etc.
+- What I want to be able to do is create zones or polygons in a field, and then use QGIS to create random points within each polygon that i can "sample" with the drone.
+- Now I can do all that work in QGIS, save the points as a geojson, and easily convert to a waypoint mission for my Mavic 3M.
 
 ---
 
@@ -34,7 +39,7 @@ This application intelligently updates **both files** ensuring:
 ## 🚀 Features
 
 ### Core Functionality
-- **Seed KMZ Upload** - Use any DJI Pilot 2 exported mission as a template
+- **Seed KMZ Upload** - Use any DJI Pilot 2 exported mission as a template (or use the one provided in this project (seed.kmz))
 - **GeoJSON Import** - Point features in WGS84 (EPSG:4326) coordinate system
 - **Dual File Updates** - Modifies both waylines.wpml and template.kml
 - **Altitude Management** - Override or preserve individual waypoint altitudes
