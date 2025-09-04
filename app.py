@@ -192,3 +192,7 @@ st.markdown(
     "© Created by Jesse Lawrence / Broken Arrow Consulting ~ Feeling Optimistic on AI and The Future.",
     unsafe_allow_html=True
 )
+st.markdown(
+    "🌐 [jesselawrence.pro](https://jesselawrence.pro)",
+    unsafe_allow_html=True
+)
