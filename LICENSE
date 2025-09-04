@@ -1,0 +1,44 @@
+
+MIT License
+
+Copyright (c) 2024 QGIS → DJI WPML Converter
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+ADDITIONAL DISCLAIMERS:
+
+1. AI-Generated Code: This software was primarily generated using artificial 
+   intelligence tools. While efforts have been made to ensure functionality, 
+   users should thoroughly test and validate the software before use in 
+   production or critical applications.
+
+2. No Flight Guarantee: This software is designed to work with DJI drone 
+   mission files, but there is no guarantee that generated missions will work 
+   correctly with your specific drone model, firmware version, or flight 
+   conditions. Always validate missions in DJI Pilot 2 and conduct test flights 
+   in safe environments before operational use.
+
+3. Aviation Safety: Users are solely responsible for ensuring compliance with 
+   local aviation regulations, airspace restrictions, and safe flight practices. 
+   The authors assume no responsibility for any incidents, accidents, or 
+   regulatory violations resulting from the use of this software.
+
+4. Use at Your Own Risk: This tool modifies critical flight mission files. 
+   Users assume all risks associated with using modified mission files for 
+   drone operations.
