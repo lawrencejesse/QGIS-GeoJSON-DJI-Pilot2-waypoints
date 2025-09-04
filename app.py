@@ -1,138 +1,187 @@
 import streamlit as st
-import zipfile
-import io
-import json
-import xml.etree.ElementTree as ET
+import zipfile, io, json, xml.etree.ElementTree as ET
 
-# KML namespace
-KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
-ET.register_namespace("", KML_NS["kml"])
+# --- Constants and Namespace Setup ---
+KML_URI = "http://www.opengis.net/kml/2.2"
+ET.register_namespace("", KML_URI)
 
-def points_from_geojson(file):
-    """Extract points from GeoJSON file."""
+# --- Utility Functions ---
+
+def detect_wpml_uri_and_prefix(root):
+    """Finds the WPML namespace URI and registers 'wpml' as its prefix."""
+    wpml_uri = None
+    for el in root.iter():
+        if el.tag.startswith("{") and "wpmz" in el.tag:
+            wpml_uri = el.tag.split("}")[0].strip("{")
+            break
+    if not wpml_uri:
+        # Fallback if the root doesn't immediately have the namespace
+        for _, val in ET.iterparse(io.StringIO(ET.tostring(root, encoding='unicode')), events=['start-ns']):
+            if 'wpmz' in val[1]:
+                wpml_uri = val[1]
+                break
+    if not wpml_uri:
+        raise RuntimeError("Could not detect WPML namespace in the seed file.")
+
+    ET.register_namespace("wpml", wpml_uri)
+    return wpml_uri
+
+def NS(wpml_uri):
+    """Returns the namespace map for searches."""
+    return {"kml": KML_URI, "wpml": wpml_uri}
+
+def points_from_geojson(file, default_alt=30.0):
+    """Extracts a list of (lon, lat, alt) tuples from a GeoJSON file."""
     gj = json.load(file)
     pts = []
-    for f in gj["features"]:
-        if f["geometry"]["type"].lower() == "point":
-            lon, lat = f["geometry"]["coordinates"][:2]
-            # Get altitude from properties or use default
-            alt = float(f.get("properties", {}).get("alt_m", 30))
+    for f in gj.get("features", []):
+        g = f.get("geometry") or {}
+        if (g.get("type") or "").lower() == "point":
+            lon, lat = g["coordinates"][:2]
+            alt = float((f.get("properties") or {}).get("alt_m", default_alt))
             pts.append((lon, lat, alt))
     return pts
 
-def set_coords(pm, lon, lat, alt):
-    """Update coordinates in a placemark."""
-    pt = pm.find(".//kml:Point", KML_NS)
-    if pt is not None:
-        coords = pt.find("kml:coordinates", KML_NS)
-        if coords is not None:
-            coords.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+def find_route_folder(root, ns):
+    """Finds the most likely mission Folder in a KML/WPML document."""
+    candidates = root.findall(".//kml:Document/kml:Folder", ns)
+    best = (0, None)
+    for f in candidates:
+        pts = f.findall("kml:Placemark[kml:Point]", ns)
+        if pts: # A folder must contain points to be a candidate
+            score = len(pts)
+            if bool(f.findall(".//wpml:*", ns)):
+                score += 100
+            if score > best[0]:
+                best = (score, f)
+    return best[1]
 
-st.title("QGIS → DJI WPML Converter")
-st.write("Convert QGIS waypoints to DJI drone mission format")
+# --- Core Logic for Modifying KML/WPML ---
 
-# File uploaders
-seed = st.file_uploader("Upload seed KMZ from DJI Pilot 2", type=["kmz"])
-pts_file = st.file_uploader("Upload waypoints file (GeoJSON/JSON)", type=["geojson", "json"])
+def update_mission_file(root, points, ns, is_template_kml):
+    """
+    The core logic for updating a KML/WPML file tree.
+    This function modifies the XML root in-place.
+    """
+    folder = find_route_folder(root, ns)
+    if folder is None:
+        raise RuntimeError(f"Could not find a valid route Folder in {'template.kml' if is_template_kml else 'waylines.wpml'}.")
 
-# Optional altitude override
-col1, col2 = st.columns([3, 1])
-with col1:
-    override_alt = st.checkbox("Override altitude for all waypoints")
-with col2:
-    if override_alt:
-        alt_value = st.number_input("Altitude (m)", value=30.0, min_value=0.0, max_value=500.0, step=1.0)
+    pms = folder.findall("kml:Placemark[kml:Point]", ns)
+    if not pms:
+        raise RuntimeError(f"The route folder in {'template.kml' if is_template_kml else 'waylines.wpml'} contains no Point placemarks to use as a template.")
 
-if seed and pts_file and st.button("Convert to DJI Format", type="primary"):
+    template_pm = pms[-1]
+
+    # Clear existing waypoints
+    for pm in pms:
+        folder.remove(pm)
+
+    # Add new waypoints based on the template
+    for i, (lon, lat, alt) in enumerate(points):
+        clone = ET.fromstring(ET.tostring(template_pm, encoding="utf-8"))
+
+        # Set coordinates and altitude
+        coords_el = clone.find(".//kml:coordinates", ns)
+        if coords_el is not None:
+            if is_template_kml:
+                coords_el.text = f"{lon:.7f},{lat:.7f},{alt:.2f}"
+            else: # waylines.wpml
+                coords_el.text = f"{lon:.7f},{lat:.7f}"
+                eh_el = clone.find("wpml:executeHeight", ns)
+                if eh_el is not None:
+                    eh_el.text = f"{alt:.2f}"
+
+        # **CRITICAL FIX**: Re-index for BOTH file types.
+        # DJI uses 0-based index in waylines.wpml and 1-based in template.kml
+        index_el = clone.find("wpml:index", ns)
+        if index_el is not None:
+            index_el.text = str(i if not is_template_kml else i + 1)
+
+        folder.append(clone)
+
+    # Update the LineString that visualizes the path
+    ls_coords_el = folder.find(".//kml:LineString/kml:coordinates", ns)
+    if ls_coords_el is not None:
+        if is_template_kml:
+            ls_coords_el.text = " ".join(f"{lon:.7f},{lat:.7f},{alt:.2f}" for lon, lat, alt in points)
+        else: # waylines.wpml often has no altitude in its linestring
+            ls_coords_el.text = " ".join(f"{lon:.7f},{lat:.7f},0" for lon, lat, _ in points)
+
+    # Update waypoint count in waylines.wpml
+    if not is_template_kml:
+        for el in folder.findall(".//wpml:*", ns):
+            local = el.tag.split("}", 1)[-1].lower()
+            if "waypoint" in local and ("num" in local or "count" in local):
+                el.text = str(len(points))
+
+
+# --- Streamlit UI ---
+
+st.title("QGIS → DJI WPML (KMZ) — M3E/M3M")
+st.write("This tool updates both `template.kml` (geometry) and `waylines.wpml` (flight params) in a seed KMZ.")
+
+seed = st.file_uploader("Seed KMZ (from DJI Pilot 2)", type=["kmz"])
+pts_file = st.file_uploader("Waypoints (GeoJSON/JSON)", type=["geojson", "json"])
+c1, c2 = st.columns([3,2])
+with c1:
+    override_alt = st.checkbox("Override altitude for all points", value=True)
+with c2:
+    alt_value = st.number_input("Altitude (m rel. to takeoff)", 0.0, 1200.0, 30.0, 1.0)
+
+if seed and pts_file and st.button("Build KMZ", type="primary"):
     try:
-        # Open the seed KMZ
-        zin = zipfile.ZipFile(seed)
-        
-        # Find waylines.wpml file
-        wpml_name = None
-        for name in zin.namelist():
-            if name.lower().endswith("waylines.wpml"):
-                wpml_name = name
-                break
-        
-        if not wpml_name:
-            st.error("❌ No waylines.wpml found in seed KMZ. Please use a KMZ exported from DJI Pilot 2.")
-        else:
-            # Parse the WPML file
-            root = ET.fromstring(zin.read(wpml_name))
-            
-            # Find all placemarks with points
-            placemarks = root.findall(".//kml:Placemark[kml:Point]", KML_NS)
-            
-            # Extract points from GeoJSON
-            points = points_from_geojson(pts_file)
-            
-            # Apply altitude override if enabled
-            if override_alt:
-                points = [(lon, lat, alt_value) for lon, lat, _ in points]
-            
-            if len(points) < 2:
-                st.error("❌ Need at least 2 waypoints in GeoJSON file.")
-            else:
-                st.info(f"📍 Processing {len(points)} waypoints from GeoJSON")
-                st.info(f"📋 Found {len(placemarks)} placemarks in seed KMZ")
-                
-                # Find Document element
-                doc = root.find(".//kml:Document", KML_NS)
-                
-                if doc is None:
-                    st.error("❌ No Document element found in WPML file")
+        zin = zipfile.ZipFile(seed, "r")
+
+        file_names = zin.namelist()
+        wpml_name = next((n for n in file_names if n.lower().endswith("waylines.wpml")), None)
+        template_name = next((n for n in file_names if n.lower().endswith("template.kml")), None)
+
+        if not wpml_name or not template_name:
+            st.error("Seed KMZ must contain both 'template.kml' and 'waylines.wpml'.")
+            st.stop()
+
+        wpml_root = ET.fromstring(zin.read(wpml_name))
+        template_root = ET.fromstring(zin.read(template_name))
+
+        wpml_uri = detect_wpml_uri_and_prefix(wpml_root)
+        ns = NS(wpml_uri)
+
+        points = points_from_geojson(pts_file, default_alt=alt_value)
+        if len(points) < 2:
+            st.error("GeoJSON must contain at least 2 Point features.")
+            st.stop()
+        if override_alt:
+            points = [(lon, lat, alt_value) for lon, lat, _ in points]
+
+        # --- UPDATE BOTH FILES ---
+        st.info("Updating template.kml (geometry)...")
+        update_mission_file(template_root, points, ns, is_template_kml=True)
+
+        st.info("Updating waylines.wpml (flight parameters)...")
+        update_mission_file(wpml_root, points, ns, is_template_kml=False)
+
+        # --- REPACK THE KMZ ---
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename == template_name:
+                    zout.writestr(item, ET.tostring(template_root, encoding="utf-8", xml_declaration=True))
+                elif item.filename == wpml_name:
+                    zout.writestr(item, ET.tostring(wpml_root, encoding="utf-8", xml_declaration=True))
                 else:
-                    # Adjust number of placemarks to match points
-                    if len(placemarks) < len(points):
-                        # Need to add more placemarks - clone the last one
-                        st.info(f"➕ Adding {len(points) - len(placemarks)} placemarks")
-                        while len(placemarks) < len(points):
-                            # Clone the last placemark
-                            clone = ET.fromstring(ET.tostring(placemarks[-1], encoding="utf-8"))
-                            doc.append(clone)
-                            placemarks.append(clone)
-                    
-                    elif len(placemarks) > len(points):
-                        # Need to remove extra placemarks
-                        st.info(f"➖ Removing {len(placemarks) - len(points)} excess placemarks")
-                        for _ in range(len(placemarks) - len(points)):
-                            doc.remove(placemarks.pop())
-                    
-                    # Update coordinates for each placemark
-                    st.info("🔄 Updating waypoint coordinates...")
-                    for i, (pm, (lon, lat, alt)) in enumerate(zip(placemarks, points)):
-                        set_coords(pm, lon, lat, alt)
-                        if i < 5:  # Show first 5 for confirmation
-                            st.text(f"   Waypoint {i+1}: {lon:.7f}, {lat:.7f}, {alt:.2f}m")
-                    
-                    if len(points) > 5:
-                        st.text(f"   ... and {len(points) - 5} more waypoints")
-                    
-                    # Create output KMZ
-                    buf = io.BytesIO()
-                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-                        for name in zin.namelist():
-                            if name == wpml_name:
-                                # Write the modified WPML
-                                zout.writestr(name, ET.tostring(root, encoding="utf-8", xml_declaration=True))
-                            else:
-                                # Copy all other files as-is
-                                zout.writestr(name, zin.read(name))
-                    
-                    # Success!
-                    st.success(f"✅ Successfully converted {len(points)} waypoints to DJI format!")
-                    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download Modified KMZ",
-                        data=buf.getvalue(),
-                        file_name="mission_from_qgis.kmz",
-                        mime="application/vnd.google-earth.kmz"
-                    )
-    
+                    zout.writestr(item, zin.read(item.filename))
+
+        st.success(f"✅ Success! Rebuilt KMZ with {len(points)} waypoints.")
+        st.download_button(
+            "📥 Download KMZ",
+            data=buf.getvalue(),
+            file_name="mission_from_qgis.kmz",
+            mime="application/vnd.google-earth.kmz"
+        )
+
     except json.JSONDecodeError:
-        st.error("❌ Invalid JSON/GeoJSON file. Please check the file format.")
+        st.error("Invalid GeoJSON file.")
     except Exception as e:
-        st.error(f"❌ Error processing files: {str(e)}")
+        st.error(f"An error occurred: {e}")
         st.exception(e)
