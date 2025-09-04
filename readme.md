@@ -1,40 +1,180 @@
+
 # QGIS → DJI WPML (KMZ) Converter
 
-A Streamlit web app that lets you plan waypoints in **QGIS** and export a **DJI Pilot 2**-ready **KMZ** (WPML Waypoint 3.x style).  
-You provide a tiny **seed KMZ** (exported from Pilot 2) and a **GeoJSON** of points. The app replaces the seed’s waypoints with your GeoJSON points and keeps all the DJI mission metadata intact.
+A Streamlit web application that enables seamless waypoint planning workflow from **QGIS** to **DJI Pilot 2**. Export professional drone missions by converting GeoJSON waypoints into DJI-compatible **KMZ** files using the **WPML Waypoint 3.x** format.
 
-> **Works best when the seed KMZ is created on the same controller/firmware you’ll fly.**
-
----
-
-## Why a “seed” KMZ?
-
-DJI route files (KMZ) contain:
-- `wpmz/waylines.wpml` → the **executable** route (what the aircraft actually flies)
-- `wpmz/template.kml` → the **planning** layer (what Pilot 2 may use to re-generate the exec route)
-
-This app updates **both** files so Pilot 2 doesn’t fall back to the original two seed points.
+> **✈️ Optimized for DJI Matrice 3E/3M series and other WPML 3.x compatible aircraft**
 
 ---
 
-## Features
+## 🎯 Problem Solved
 
-- ✅ Upload **seed KMZ** (from DJI Pilot 2)  
-- ✅ Upload **GeoJSON** (Point features in WGS84 / EPSG:4326)  
-- ✅ Optional **altitude override** (meters, relative to takeoff)  
-- ✅ Updates:
-  - `template.kml` with **3D** coordinates: `lon,lat,alt`
-  - `waylines.wpml` with **2D** coordinates: `lon,lat` and per-waypoint `<wpml:executeHeight>`
-  - Sequential per-waypoint indexes (0,1,2,…) where applicable
-- ✅ Preserves all other files in the KMZ (icons, styles, etc.)
-- ✅ Keeps DJI WPML namespace/prefix exactly as in the seed
+Planning complex drone missions in DJI Pilot 2 can be limiting for precision work. This tool bridges the gap by allowing you to:
+
+- Plan detailed waypoint missions in **QGIS** with full GIS capabilities
+- Export waypoints as **GeoJSON** from QGIS
+- Convert them into **DJI Pilot 2**-ready KMZ files
+- Maintain all DJI mission metadata and flight parameters
 
 ---
 
-## Quick Start
+## 🔧 How It Works
 
-### 1) Install
+DJI route files (KMZ) contain two critical components:
+- `wpmz/waylines.wpml` → **Executable flight path** (what the aircraft flies)
+- `wpmz/template.kml` → **Planning visualization** (what Pilot 2 displays)
 
-```bash
-# (optional) create a virtual env first
-pip install streamlit
+This application intelligently updates **both files** ensuring:
+- ✅ Pilot 2 doesn't revert to original seed waypoints
+- ✅ Mission parameters are preserved from your seed file
+- ✅ Flight paths match your QGIS planning exactly
+
+---
+
+## 🚀 Features
+
+### Core Functionality
+- **Seed KMZ Upload** - Use any DJI Pilot 2 exported mission as a template
+- **GeoJSON Import** - Point features in WGS84 (EPSG:4326) coordinate system
+- **Dual File Updates** - Modifies both waylines.wpml and template.kml
+- **Altitude Management** - Override or preserve individual waypoint altitudes
+
+### Technical Capabilities
+- **Coordinate Precision** - Maintains 7 decimal place accuracy for coordinates
+- **Index Management** - Proper waypoint indexing (0-based for waylines, 1-based for template)
+- **Namespace Preservation** - Keeps original DJI WPML namespaces intact
+- **Metadata Retention** - Preserves flight parameters, speeds, and actions from seed
+- **File Integrity** - Maintains all KMZ assets (icons, styles, manifests)
+
+### User Experience
+- **Web-Based Interface** - No software installation required
+- **Real-Time Processing** - Instant feedback and error handling
+- **Download Ready** - One-click KMZ download for immediate use
+
+---
+
+## 📋 Requirements
+
+### Seed KMZ Requirements
+- Export from **DJI Pilot 2** on the same controller/firmware you'll use for flight
+- Must contain at least 2 waypoints
+- Should include your desired flight parameters (speed, altitude, actions)
+
+### GeoJSON Requirements
+- **Point features only** (LineString/Polygon not supported)
+- **WGS84 coordinate system** (EPSG:4326)
+- **Minimum 2 points** required
+- Optional `alt_m` property in feature properties for individual altitudes
+
+---
+
+## 🎯 Quick Start
+
+### 1. Launch the Application
+Access the Streamlit app by clicking the **Run** button above.
+
+### 2. Prepare Your Files
+**Create a seed KMZ:**
+1. Open DJI Pilot 2
+2. Create a simple 2-point mission with your desired flight parameters
+3. Export as KMZ file
+
+**Export from QGIS:**
+1. Create Point features for your waypoints
+2. Ensure CRS is set to WGS84 (EPSG:4326)
+3. Export layer as GeoJSON
+4. (Optional) Add `alt_m` field with altitude values in meters
+
+### 3. Convert Mission
+1. Upload your seed KMZ file
+2. Upload your GeoJSON waypoints
+3. Configure altitude settings
+4. Click "Build KMZ"
+5. Download your mission-ready file
+
+---
+
+## 📁 Example GeoJSON Structure
+
+```json
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-122.4194, 37.7749]
+      },
+      "properties": {
+        "alt_m": 50.0,
+        "name": "Waypoint 1"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-122.4094, 37.7849]
+      },
+      "properties": {
+        "alt_m": 45.0,
+        "name": "Waypoint 2"
+      }
+    }
+  ]
+}
+```
+
+---
+
+## 🔧 Technical Details
+
+### Supported File Formats
+- **Input**: KMZ (seed), GeoJSON/JSON (waypoints)
+- **Output**: KMZ (DJI Pilot 2 compatible)
+
+### Coordinate Handling
+- **Template.kml**: 3D coordinates (`lon,lat,alt`)
+- **Waylines.wpml**: 2D coordinates (`lon,lat`) + separate `<wpml:executeHeight>`
+- **LineString**: Updated for flight path visualization
+
+### WPML Compatibility
+- **WPML 3.x** format support
+- **Namespace preservation** from seed files
+- **Metadata retention** for all flight parameters
+
+---
+
+## 📝 Best Practices
+
+### For Optimal Results
+1. **Create seed missions** on the same controller you'll use for flight
+2. **Test with simple missions** first (2-3 waypoints)
+3. **Verify altitude references** match your takeoff location
+4. **Check coordinate precision** in QGIS (should be WGS84)
+5. **Validate in DJI Pilot 2** before flight
+
+### Troubleshooting
+- **"Invalid WPML namespace"**: Ensure seed KMZ is from DJI Pilot 2
+- **"No Point features found"**: Check GeoJSON contains Point geometry types
+- **"Altitude issues"**: Verify altitude units are in meters above takeoff
+
+---
+
+## 🤝 Contributing
+
+This tool supports the open WPML standard promoted by DJI. Feedback and improvements are welcome to enhance drone automation workflows.
+
+---
+
+## ⚠️ Disclaimer
+
+- Always validate generated missions in DJI Pilot 2 before flight
+- Test missions in safe environments first
+- Ensure compliance with local aviation regulations
+- Verify altitude references match your operational requirements
+
+---
+
+**Built with Streamlit • Optimized for DJI WPML 3.x • QGIS Integration Ready**
